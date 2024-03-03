@@ -19,6 +19,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from bert import BertModel
 from optimizer import AdamW
@@ -33,7 +34,6 @@ from datasets import (
 )
 
 from evaluation import model_eval_sst, model_eval_multitask, model_eval_test_multitask
-
 
 TQDM_DISABLE=False
 
@@ -72,7 +72,16 @@ class MultitaskBERT(nn.Module):
                 param.requires_grad = True
         # You will want to add layers here to perform the downstream tasks.
         ### TODO
-        raise NotImplementedError
+        self.sentiment = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size),
+                                                nn.ReLU(),
+                                                nn.Linear(config.hidden_size, 5))
+        self.paraphrase = nn.Sequential(nn.Linear(2*config.hidden_size, config.hidden_size),
+                                                nn.ReLU(),
+                                                nn.Linear(config.hidden_size, 1))
+        
+        self.similarity = nn.Sequential(nn.Linear(2*config.hidden_size, config.hidden_size),
+                                                nn.ReLU(),
+                                                nn.Linear(config.hidden_size, 1))
 
 
     def forward(self, input_ids, attention_mask):
@@ -82,7 +91,9 @@ class MultitaskBERT(nn.Module):
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         ### TODO
-        raise NotImplementedError
+        output = self.bert(input_ids, attention_mask)
+        cls = output['pooler_output']
+        return cls #Just output the BERT embeddings
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -92,7 +103,9 @@ class MultitaskBERT(nn.Module):
         Thus, your output should contain 5 logits for each sentence.
         '''
         ### TODO
-        raise NotImplementedError
+        output = self.bert(input_ids, attention_mask)
+        cls = output['pooler_output']
+        return self.sentiment(cls)
 
 
     def predict_paraphrase(self,
@@ -103,8 +116,15 @@ class MultitaskBERT(nn.Module):
         during evaluation.
         '''
         ### TODO
-        raise NotImplementedError
+        #Get BERT sentence embeddings for both sentences
+        output_1 = self.bert(input_ids_1, attention_mask_1)
+        output_2 = self.bert(input_ids_2, attention_mask_2)
+        cls_1 = output_1['pooler_output']
+        cls_2 = output_2['pooler_output']
 
+        #Concatenate both embeddings to get 2*hidden_size features
+        cls_cat = torch.cat([cls_1, cls_2], dim=1)
+        return self.paraphrase(cls_cat)
 
     def predict_similarity(self,
                            input_ids_1, attention_mask_1,
@@ -112,11 +132,22 @@ class MultitaskBERT(nn.Module):
         '''Given a batch of pairs of sentences, outputs a single logit corresponding to how similar they are.
         Note that your output should be unnormalized (a logit).
         '''
-        ### TODO
-        raise NotImplementedError
+        #Get BERT sentence embeddings for both sentences
+        output_1 = self.bert(input_ids_1, attention_mask_1)
+        output_2 = self.bert(input_ids_2, attention_mask_2)
+        cls_1 = output_1['pooler_output']
+        cls_2 = output_2['pooler_output']
 
+        #Concatenate both embeddings to get 2*hidden_size features
+        cls_cat = torch.cat([cls_1, cls_2], dim=1)
+        return self.paraphrase(cls_cat)
 
-
+def simCSELoss(h, h_plus, temp, sim):
+    '''Given two encoded sentences h and h_plus (of shape (b, h))
+    '''
+    num = torch.div(sim(h, h_plus), temp)
+    num_exp = torch.exp(num)
+    return -torch.log(torch.div(num_exp, num_exp.sum(dim=0))) #TODO: Make sure this is correct
 
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
@@ -162,6 +193,7 @@ def train_multitask(args):
               'option': args.option}
 
     config = SimpleNamespace(**config)
+    sim = torch.nn.CosineSimilarity()
 
     model = MultitaskBERT(config)
     model = model.to(device)
@@ -184,8 +216,20 @@ def train_multitask(args):
             b_labels = b_labels.to(device)
 
             optimizer.zero_grad()
-            logits = model.predict_sentiment(b_ids, b_mask)
-            loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+            #If simCSE call model twice to get two dropout masks z and z'
+            if args.mode == 'simcse':
+                h = model.predict_sentiment(b_ids, b_mask)
+                h_plus = model.predict_sentiment(b_ids, b_mask)
+
+                #Calculate simCSE loss term
+                sim_loss = simCSELoss(h, h_plus, args.temp, sim).sum(dim=0) / args.batch_size #Perform mean reduction
+                ce_loss = F.cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                loss = ce_loss + sim_loss
+            
+            #For default, calculate single model prediction and 
+            else:    
+                logits = model.predict_sentiment(b_ids, b_mask)
+                loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
 
             loss.backward()
             optimizer.step()
@@ -326,6 +370,10 @@ def get_args():
     parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
     parser.add_argument("--hidden_dropout_prob", type=float, default=0.3)
     parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
+    parser.add_argument("--mode", type=str, help="default: default training loop; simcse: train using contrastive learning",
+                        choices=('default', 'simcse'), default='default')
+    parser.add_argument("--temp", type=float, help="temperature value for simCSE loss objective",
+                        default=0.1)
 
     args = parser.parse_args()
     return args

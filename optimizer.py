@@ -60,6 +60,7 @@ class AdamW(Optimizer):
                 # Refer to the default project handout for more details.
 
                 ### TODO
+                device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
                 beta1 = group["betas"][0]
                 beta2 = group["betas"][1]
                 eps = group["eps"]
@@ -67,8 +68,8 @@ class AdamW(Optimizer):
 
                 if "t" not in state.keys():
                     state["t"] = 0
-                    state["mt"] = torch.zeros(p.data.shape)
-                    state["vt"] = torch.zeros(p.data.shape)
+                    state["mt"] = torch.zeros(p.data.shape, device=device)
+                    state["vt"] = torch.zeros(p.data.shape, device=device)
                 
                 state["t"] += 1
                 state["mt"] = beta1*state["mt"] + (1 - beta1)*grad
