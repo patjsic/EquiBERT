@@ -36,6 +36,7 @@ from datasets import (
 from evaluation import model_eval_sst, model_eval_multitask, model_eval_test_multitask
 
 TQDM_DISABLE=False
+writer = SummaryWriter()
 
 
 # Fix the random seed.
@@ -217,14 +218,12 @@ def train_multitask(args):
 
             optimizer.zero_grad()
             #If simCSE call model twice to get two dropout masks z and z'
-            if args.mode == 'simcse':
+            if args.mode == "simcse":
                 h = model.predict_sentiment(b_ids, b_mask)
                 h_plus = model.predict_sentiment(b_ids, b_mask)
 
                 #Calculate simCSE loss term
-                sim_loss = simCSELoss(h, h_plus, args.temp, sim).sum(dim=0) / args.batch_size #Perform mean reduction
-                ce_loss = F.cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
-                loss = ce_loss + sim_loss
+                loss = simCSELoss(h, h_plus, args.temp, sim).sum(dim=0) / args.batch_size #Perform mean reduction
             
             #For default, calculate single model prediction and 
             else:    
@@ -233,6 +232,7 @@ def train_multitask(args):
 
             loss.backward()
             optimizer.step()
+            writer.flush()
 
             train_loss += loss.item()
             num_batches += 1
@@ -245,6 +245,11 @@ def train_multitask(args):
         if dev_acc > best_dev_acc:
             best_dev_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
+        
+        writer.add_scalar("Loss/train", train_loss, epoch)
+        writer.add_scalar("Acc/Train", train_acc, epoch)
+        writer.add_scalar("Acc/Dev", dev_acc, epoch)
+        writer.flush()
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
 
