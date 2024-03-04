@@ -215,7 +215,7 @@ def train_multitask(args):
                 h = model.predict_sentiment(b_ids, b_mask)
                 h_plus = model.predict_sentiment(b_ids, b_mask)
 
-                sim = F.cosine_similarity(h.unsqueeze(1), h_plus.unsqueeze(0), dim=-1) / temp
+                sim = F.cosine_similarity(h.unsqueeze(1), h_plus.unsqueeze(0), dim=-1) / args.temp
                 labels = torch.arange(args.batch_size).long().to(device)
 
                 #Calculate simCSE loss term
@@ -374,7 +374,7 @@ def get_args():
     parser.add_argument("--mode", type=str, help="default: default training loop; simcse: train using contrastive learning",
                         choices=('default', 'simcse'), default='default')
     parser.add_argument("--temp", type=float, help="temperature value for simCSE loss objective",
-                        default=0.1)
+                        default=0.05)
 
     args = parser.parse_args()
     return args
