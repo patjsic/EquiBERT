@@ -163,8 +163,6 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
-def predict_on_task(model, task)
-
 def train_multitask(args):
     '''Train MultitaskBERT.
 
