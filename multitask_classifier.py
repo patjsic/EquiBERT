@@ -179,6 +179,14 @@ def train_multitask(args):
     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sst_dev_data.collate_fn)
 
+    sts_train_data = SentencePairTestDataset(sts_train_data, args)
+    sts_dev_data = SentencePairDataset(sts_dev_data, args, isRegression=True)
+
+    sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
+                                        collate_fn=sts_train_data.collate_fn)
+    sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=sts_dev_data.collate_fn)
+
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
               'num_labels': num_labels,
@@ -219,7 +227,9 @@ def train_multitask(args):
                 labels = torch.arange(args.batch_size).long().to(device)
 
                 #Calculate simCSE loss term
-                loss = F.cross_entropy(sim, labels) #maximize diagonal elements
+                sim_loss = F.cross_entropy(sim, labels) #maximize diagonal elements
+                ce_loss = F.cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                loss = args.lambda1 * sim_loss + args.lambda2* ce_loss
             
             #For default, calculate single model prediction and 
             else:    
@@ -375,6 +385,8 @@ def get_args():
                         choices=('default', 'simcse'), default='default')
     parser.add_argument("--temp", type=float, help="temperature value for simCSE loss objective",
                         default=0.05)
+    parser.add_argument("--lambda1", type=float, help="weight for simcse loss term", default=1)
+    parser.add_argument("--lambda2", type=float, help="weight for predictor loss term", default=1)
 
     args = parser.parse_args()
     return args
