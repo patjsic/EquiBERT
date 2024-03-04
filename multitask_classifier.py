@@ -226,10 +226,10 @@ def train_multitask(args):
     # Run for the specified number of epochs.
     for epoch in range(args.epochs):
         model.train()
-        train_loss = 0
-        num_batches = 0
         #iterate through each dataset
         for key in train_dataloaders.keys():
+            train_loss = 0
+            num_batches = 0
             for batch in tqdm(train_dataloaders[key], desc=f'train-{epoch}', disable=TQDM_DISABLE):
                 if key == "sst":
                     b_ids, b_mask, b_labels = (batch['token_ids'],
