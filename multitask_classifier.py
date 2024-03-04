@@ -143,13 +143,6 @@ class MultitaskBERT(nn.Module):
         cls_cat = torch.cat([cls_1, cls_2], dim=1)
         return self.paraphrase(cls_cat)
 
-def simCSELoss(h, h_plus, temp, sim):
-    '''Given two encoded sentences h and h_plus (of shape (b, h))
-    '''
-    num = torch.div(sim(h, h_plus), temp)
-    num_exp = torch.exp(num)
-    return -torch.log(torch.div(num_exp, num_exp.sum(dim=0))) #TODO: Make sure this is correct
-
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
         'model': model.state_dict(),
@@ -222,8 +215,11 @@ def train_multitask(args):
                 h = model.predict_sentiment(b_ids, b_mask)
                 h_plus = model.predict_sentiment(b_ids, b_mask)
 
+                sim = F.cosine_similarity(h.unsqueeze(1), h_plus.unsqueeze(0), dim=-1) / temp
+                labels = torch.arange(args.batch_size).long().to(device)
+
                 #Calculate simCSE loss term
-                loss = simCSELoss(h, h_plus, args.temp, sim).sum(dim=0) / args.batch_size #Perform mean reduction
+                loss = F.cross_entropy(sim, labels) #maximize diagonal elements
             
             #For default, calculate single model prediction and 
             else:    
