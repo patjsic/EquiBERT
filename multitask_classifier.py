@@ -230,7 +230,6 @@ def train_multitask(args):
         num_batches = 0
         #iterate through each dataset
         for key in train_dataloaders.keys():
-            key = "sts"
             for batch in tqdm(train_dataloaders[key], desc=f'train-{epoch}', disable=TQDM_DISABLE):
                 if key == "sst":
                     b_ids, b_mask, b_labels = (batch['token_ids'],
