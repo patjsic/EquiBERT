@@ -268,7 +268,7 @@ def train_multitask(args):
                 #If contrastive learning, calculate contrastive loss and add to loss term
                 if args.mode == "simcse":
                     sim = F.cosine_similarity(h.unsqueeze(1), h_plus.unsqueeze(0), dim=-1) / args.temp
-                    labels = torch.arange(args.batch_size).long().to(device)
+                    labels = torch.arange(args.batch_size).to(device)
 
                     #Calculate simCSE loss term
                     sim_loss = F.cross_entropy(sim, labels) #maximize diagonal elements
