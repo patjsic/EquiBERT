@@ -114,7 +114,6 @@ class MultitaskBERT(nn.Module):
         cls = output['pooler_output']
         return self.sentiment(cls)
 
-
     def predict_paraphrase(self,
                            input_ids_1, attention_mask_1,
                            input_ids_2, attention_mask_2):
@@ -186,8 +185,8 @@ def train_multitask(args):
                                     collate_fn=sst_dev_data.collate_fn)
 
     #Load paraphrase Data
-    para_train_data = SentencePairTestDataset(para_train_data, args)
-    para_dev_data = SentencePairDataset(para_dev_data, args, isRegression=True)
+    para_train_data = SentencePairDataset(para_train_data, args)
+    para_dev_data = SentencePairDataset(para_dev_data, args)
 
     para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
                                         collate_fn=para_train_data.collate_fn)
@@ -195,7 +194,7 @@ def train_multitask(args):
                                     collate_fn=para_dev_data.collate_fn)
     
     #Load STS Data
-    sts_train_data = SentencePairTestDataset(sts_train_data, args)
+    sts_train_data = SentencePairDataset(sts_train_data, args)
     sts_dev_data = SentencePairDataset(sts_dev_data, args, isRegression=True)
 
     sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
@@ -231,6 +230,7 @@ def train_multitask(args):
         num_batches = 0
         #iterate through each dataset
         for key in train_dataloaders.keys():
+            key = "sts"
             for batch in tqdm(train_dataloaders[key], desc=f'train-{epoch}', disable=TQDM_DISABLE):
                 if key == "sst":
                     b_ids, b_mask, b_labels = (batch['token_ids'],
@@ -240,16 +240,13 @@ def train_multitask(args):
                     b_mask = b_mask.to(device)
                     b_labels = b_labels.to(device)
                 else:
-                    (b_ids1, b_mask1,
-                        b_ids2, b_mask2,
-                        b_labels, b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
-                          batch['token_ids_2'], batch['attention_mask_2'],
-                          batch['labels'], batch['sent_ids'])
+                    b_ids1, b_mask1,b_ids2, b_mask2, b_labels, b_sent_ids = (batch['token_ids_1'], batch['attention_mask_1'], batch['token_ids_2'], batch['attention_mask_2'], batch['labels'], batch['sent_ids'])
                     
                     b_ids1 = b_ids1.to(device)
                     b_mask1 = b_mask1.to(device)
                     b_ids2 = b_ids2.to(device)
                     b_mask2 = b_mask2.to(device)
+                    b_labels = b_labels.to(device)
 
                 optimizer.zero_grad()
 
@@ -261,11 +258,11 @@ def train_multitask(args):
                 elif key == "para":
                     h = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
                     h_plus = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
-                    ce_loss = F.binary_cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                    ce_loss = F.binary_cross_entropy(h.squeeze(1), b_labels.float(), reduction='sum') / args.batch_size
                 elif key == "sts":
                     h = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
                     h_plus = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
-                    ce_loss = F.binary_cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                    ce_loss = F.mse_loss(h.squeeze(1), b_labels.float(), reduction='sum') / args.batch_size
                 else:
                     raise ValueError(f"Task label {key} not recognized.")
 
@@ -276,7 +273,7 @@ def train_multitask(args):
 
                     #Calculate simCSE loss term
                     sim_loss = F.cross_entropy(sim, labels) #maximize diagonal elements
-                    loss = args.lambda1 * sim_loss + args.lambda2* ce_loss
+                    loss = args.lambda1 * sim_loss + args.lambda2 * ce_loss
                 
                 #For default no contrastive learning just use cross entropy loss
                 else:    
