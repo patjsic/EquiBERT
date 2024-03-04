@@ -75,12 +75,18 @@ class MultitaskBERT(nn.Module):
         ### TODO
         self.sentiment = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size),
                                                 nn.ReLU(),
+                                                nn.Linear(config.hidden_size, config.hidden_size),
+                                                nn.ReLU(),
                                                 nn.Linear(config.hidden_size, 5))
         self.paraphrase = nn.Sequential(nn.Linear(2*config.hidden_size, config.hidden_size),
+                                                nn.ReLU(),
+                                                nn.Linear(config.hidden_size, config.hidden_size),
                                                 nn.ReLU(),
                                                 nn.Linear(config.hidden_size, 1))
         
         self.similarity = nn.Sequential(nn.Linear(2*config.hidden_size, config.hidden_size),
+                                                nn.ReLU(),
+                                                nn.Linear(config.hidden_size, config.hidden_size),
                                                 nn.ReLU(),
                                                 nn.Linear(config.hidden_size, 1))
 
@@ -157,6 +163,7 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
+def predict_on_task(model, task)
 
 def train_multitask(args):
     '''Train MultitaskBERT.
@@ -168,6 +175,7 @@ def train_multitask(args):
     '''
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
     # Create the data and its corresponding datasets and dataloader.
+    #Load SST Data
     sst_train_data, num_labels,para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels,para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
 
@@ -179,6 +187,16 @@ def train_multitask(args):
     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sst_dev_data.collate_fn)
 
+    #Load paraphrase Data
+    para_train_data = SentencePairTestDataset(para_train_data, args)
+    para_dev_data = SentencePairDataset(para_dev_data, args, isRegression=True)
+
+    para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
+                                        collate_fn=para_train_data.collate_fn)
+    para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=para_dev_data.collate_fn)
+    
+    #Load STS Data
     sts_train_data = SentencePairTestDataset(sts_train_data, args)
     sts_dev_data = SentencePairDataset(sts_dev_data, args, isRegression=True)
 
@@ -186,6 +204,8 @@ def train_multitask(args):
                                         collate_fn=sts_train_data.collate_fn)
     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sts_dev_data.collate_fn)
+
+    
 
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
@@ -204,60 +224,88 @@ def train_multitask(args):
     optimizer = AdamW(model.parameters(), lr=lr)
     best_dev_acc = 0
 
+    train_dataloaders = {"sst": sst_train_dataloader, "para": para_train_dataloader, "sts": sts_train_dataloader}
+
     # Run for the specified number of epochs.
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
         num_batches = 0
-        for batch in tqdm(sst_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-            b_ids, b_mask, b_labels = (batch['token_ids'],
-                                       batch['attention_mask'], batch['labels'])
+        #iterate through each dataset
+        for key in train_dataloaders.keys():
+            for batch in tqdm(train_dataloaders[key], desc=f'train-{epoch}', disable=TQDM_DISABLE):
+                if key == "sst":
+                    b_ids, b_mask, b_labels = (batch['token_ids'],
+                                            batch['attention_mask'], batch['labels'])
 
-            b_ids = b_ids.to(device)
-            b_mask = b_mask.to(device)
-            b_labels = b_labels.to(device)
+                    b_ids = b_ids.to(device)
+                    b_mask = b_mask.to(device)
+                    b_labels = b_labels.to(device)
+                else:
+                    (b_ids1, b_mask1,
+                        b_ids2, b_mask2,
+                        b_labels, b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
+                          batch['token_ids_2'], batch['attention_mask_2'],
+                          batch['labels'], batch['sent_ids'])
+                    
+                    b_ids1 = b_ids1.to(device)
+                    b_mask1 = b_mask1.to(device)
+                    b_ids2 = b_ids2.to(device)
+                    b_mask2 = b_mask2.to(device)
 
-            optimizer.zero_grad()
-            #If simCSE call model twice to get two dropout masks z and z'
-            if args.mode == "simcse":
-                h = model.predict_sentiment(b_ids, b_mask)
-                h_plus = model.predict_sentiment(b_ids, b_mask)
+                optimizer.zero_grad()
 
-                sim = F.cosine_similarity(h.unsqueeze(1), h_plus.unsqueeze(0), dim=-1) / args.temp
-                labels = torch.arange(args.batch_size).long().to(device)
+                #SST uses cross entropy, but para and STS are binary
+                if key == "sst":
+                    h = model.predict_sentiment(b_ids, b_mask)
+                    h_plus = model.predict_sentiment(b_ids, b_mask)
+                    ce_loss = F.cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                elif key == "para":
+                    h = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
+                    h_plus = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
+                    ce_loss = F.binary_cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                elif key == "sts":
+                    h = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
+                    h_plus = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
+                    ce_loss = F.binary_cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
+                else:
+                    raise ValueError(f"Task label {key} not recognized.")
 
-                #Calculate simCSE loss term
-                sim_loss = F.cross_entropy(sim, labels) #maximize diagonal elements
-                ce_loss = F.cross_entropy(h, b_labels.view(-1), reduction='sum') / args.batch_size
-                loss = args.lambda1 * sim_loss + args.lambda2* ce_loss
+                #If contrastive learning, calculate contrastive loss and add to loss term
+                if args.mode == "simcse":
+                    sim = F.cosine_similarity(h.unsqueeze(1), h_plus.unsqueeze(0), dim=-1) / args.temp
+                    labels = torch.arange(args.batch_size).long().to(device)
+
+                    #Calculate simCSE loss term
+                    sim_loss = F.cross_entropy(sim, labels) #maximize diagonal elements
+                    loss = args.lambda1 * sim_loss + args.lambda2* ce_loss
+                
+                #For default no contrastive learning just use cross entropy loss
+                else:    
+                    loss = ce_loss
+
+                loss.backward()
+                optimizer.step()
+                writer.flush()
+
+                train_loss += loss.item()
+                num_batches += 1
+
+            train_loss = train_loss / (num_batches)
+
+            train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
+            dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
+
+            if dev_acc > best_dev_acc:
+                best_dev_acc = dev_acc
+                save_model(model, optimizer, args, config, args.filepath)
             
-            #For default, calculate single model prediction and 
-            else:    
-                logits = model.predict_sentiment(b_ids, b_mask)
-                loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
-
-            loss.backward()
-            optimizer.step()
+            writer.add_scalar("Loss/train", train_loss, epoch)
+            writer.add_scalar("Acc/Train", train_acc, epoch)
+            writer.add_scalar("Acc/Dev", dev_acc, epoch)
             writer.flush()
 
-            train_loss += loss.item()
-            num_batches += 1
-
-        train_loss = train_loss / (num_batches)
-
-        train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
-
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
-            save_model(model, optimizer, args, config, args.filepath)
-        
-        writer.add_scalar("Loss/train", train_loss, epoch)
-        writer.add_scalar("Acc/Train", train_acc, epoch)
-        writer.add_scalar("Acc/Dev", dev_acc, epoch)
-        writer.flush()
-
-        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+            print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
 
 
 def test_multitask(args):
@@ -384,7 +432,7 @@ def get_args():
     parser.add_argument("--mode", type=str, help="default: default training loop; simcse: train using contrastive learning",
                         choices=('default', 'simcse'), default='default')
     parser.add_argument("--temp", type=float, help="temperature value for simCSE loss objective",
-                        default=0.05)
+                        default=1.25)
     parser.add_argument("--lambda1", type=float, help="weight for simcse loss term", default=1)
     parser.add_argument("--lambda2", type=float, help="weight for predictor loss term", default=1)
 
