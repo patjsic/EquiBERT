@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 from itertools import cycle
+from collections import OrderedDict as OD
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -200,7 +201,7 @@ class MultitaskBERT(nn.Module):
                 param.requires_grad = False
             elif config.option == 'finetune':
                 param.requires_grad = True
-        print(self.state_dict().keys())
+        # print(self.state_dict().keys())
         if canon_model or canon_path:
             self.has_canon = True
         else:
@@ -225,10 +226,8 @@ class MultitaskBERT(nn.Module):
                                                 nn.Linear(config.hidden_size, 1))
 
         #If using canonicalization network, neet to change parameters in state dict from bert.bert.layer to just bert.layer
-        if self.has_canon:
-            for key in list(self.state_dict().keys()):
-                self.state_dict()[key.replace('bert.bert.', 'bert.')] = self.state_dict().pop(key)
-        print(self.state_dict().keys())
+
+        # print(self.state_dict().keys())
 
     def forward(self, input_ids, attention_mask):
         'Takes a batch of sentences and produces embeddings for them.'
@@ -412,7 +411,7 @@ def train_multitask(args):
             print(f"Epoch {epoch}: train loss :: {train_loss :.3f}")
 
         model = MultitaskBERT(config, canon_model=canon_model)
-    elif args.load_canonical:
+    elif args.canonical_path != None:
         model = MultitaskBERT(config, canon_path=args.canonical_path)
     else:
         model = MultitaskBERT(config)
@@ -531,7 +530,15 @@ def test_multitask(args):
         config = saved['model_config']
 
         model = MultitaskBERT(config)
-        model.load_state_dict(saved['model'])
+
+        if args.train_canonical:
+            state = OD()
+            for key in list(saved['model'].keys()):
+                state[key.replace('bert.bert.', 'bert.')] = saved['model'].pop(key)
+                # self.state_dict()[key.replace('bert.bert.', 'bert.')] = self.state_dict().pop(key)
+            model.load_state_dict(state)
+        else:
+            model.load_state_dict(saved['model'])
         model = model.to(device)
         print(f"Loaded model to test from {args.filepath}")
 
@@ -579,6 +586,7 @@ def test_multitask(args):
 
         with open(args.sst_dev_out, "w+") as f:
             print(f"dev sentiment acc :: {dev_sentiment_accuracy :.3f}")
+            f.write(f"dev sentiment acc :: {dev_sentiment_accuracy :.3f}\n")
             f.write(f"id \t Predicted_Sentiment \n")
             for p, s in zip(dev_sst_sent_ids, dev_sst_y_pred):
                 f.write(f"{p} , {s} \n")
@@ -590,6 +598,7 @@ def test_multitask(args):
 
         with open(args.para_dev_out, "w+") as f:
             print(f"dev paraphrase acc :: {dev_paraphrase_accuracy :.3f}")
+            f.write(f"dev paraphrase acc :: {dev_paraphrase_accuracy :.3f}\n")
             f.write(f"id \t Predicted_Is_Paraphrase \n")
             for p, s in zip(dev_para_sent_ids, dev_para_y_pred):
                 f.write(f"{p} , {s} \n")
@@ -601,6 +610,7 @@ def test_multitask(args):
 
         with open(args.sts_dev_out, "w+") as f:
             print(f"dev sts corr :: {dev_sts_corr :.3f}")
+            f.write(f"dev sts corr :: {dev_sts_corr :.3f}")
             f.write(f"id \t Predicted_Similiary \n")
             for p, s in zip(dev_sts_sent_ids, dev_sts_y_pred):
                 f.write(f"{p} , {s} \n")
