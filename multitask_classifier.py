@@ -422,7 +422,7 @@ def train_multitask(args):
     optimizer = AdamW(model.parameters(), lr=lr)
     best_dev_acc = 0
 
-    train_dataloaders = {"sst": sst_train_dataloader}#, "sts": sts_train_dataloader}#"para": para_train_dataloader, "sts": sts_train_dataloader}
+    train_dataloaders = {"sst": sst_train_dataloader, "para": para_train_dataloader, "sts": sts_train_dataloader}
     rr_loader = RRScheduler(train_dataloaders)
     num_batch_per_epoch = 128
 
